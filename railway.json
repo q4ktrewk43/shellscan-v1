@@ -4,7 +4,7 @@
     "buildCommand": "python3 -m ensurepip --upgrade && python3 -m pip install --upgrade pip && python3 -m pip install -r mainProject/requirements.txt"
   },
   "deploy": {
-    "startCommand": "cd mainProject && python3 manage.py migrate --noinput && python3 manage.py collectstatic --noinput && python3 -m gunicorn mainProject.wsgi:application --bind 0.0.0.0:$PORT --workers 1",
+    "startCommand": "cd mainProject && python3 manage.py migrate --noinput && python3 manage.py collectstatic --noinput && python3 -m gunicorn mainProject.wsgi:application --bind 0.0.0.0:$PORT --workers 1 --timeout 120",
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 10
   }
