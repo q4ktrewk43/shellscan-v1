@@ -20,7 +20,8 @@ DEFAULT_ALLOWED_HOSTS = [
     '0.0.0.0',
     '10.0.2.2',
     '192.168.216.50',
-    'sistem1-production.up.railway.app',
+    'sistem1-production.up.railway.app', 
+    'shellscan-v1-production-fc95.up.railway.app',
     '*.up.railway.app',
     '*.railway.app',
 ]
@@ -39,7 +40,8 @@ DEFAULT_CORS_ORIGINS = [
     'http://127.0.0.1',
     'http://10.0.2.2',
     'http://192.168.216.50',
-    'https://sistem1-production.up.railway.app',
+    'https://sistem1-production.up.railway.app', 
+    'https://shellscan-v1-production-fc95.up.railway.app',
     'https://*.up.railway.app',
     'https://*.railway.app',
 ]
@@ -52,6 +54,7 @@ CORS_ALLOWED_ORIGINS = [
 ]
 DEFAULT_CSRF_TRUSTED_ORIGINS = [
     'https://sistem1-production.up.railway.app',
+    'https://shellscan-v1-production-fc95.up.railway.app',
     'https://*.up.railway.app',
     'https://*.railway.app',
 ]
