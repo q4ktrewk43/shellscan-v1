@@ -523,7 +523,7 @@ def sync_latest_advisory(force=False):
     """
     Synchronize the latest BFAR shellfish advisory.
     
-    1. Fetches BFAR HTML page
+    1. Fetches the BFAR page or falls back to WordPress archive discovery
     2. Finds the latest advisory
     3. Locates the associated PDF
     4. Downloads and parses the PDF
@@ -563,29 +563,42 @@ def sync_latest_advisory(force=False):
         source_url = _source_url()
         logger.info(f"Fetching BFAR page: {source_url}")
 
-        response = requests.get(
-            source_url,
-            timeout=REQUEST_TIMEOUT,
-            headers={'User-Agent': 'SEASTEAM advisory sync/1.0'},
-            verify=str(settings.BFAR_CA_BUNDLE),
-        )
-        response.raise_for_status()
-
         try:
-            latest_page_candidate = _find_latest(response.text, source_url)
-        except ValueError:
-            latest_page_candidate = None
-
-        latest_pdf_url = latest_page_candidate['source_url'] if latest_page_candidate else ''
-        if latest_page_candidate and latest_pdf_url.lower().split('?', 1)[0].endswith('.pdf'):
-            candidates = [{
-                **latest_page_candidate,
-                'pdf_url': latest_pdf_url,
-                'metadata_date': latest_page_candidate.get('date'),
-            }]
-            logger.info('Using direct latest BFAR homepage PDF: %s', latest_pdf_url)
-        else:
+            response = requests.get(
+                source_url,
+                timeout=REQUEST_TIMEOUT,
+                headers={'User-Agent': 'SEASTEAM advisory sync/1.0'},
+                verify=str(settings.BFAR_CA_BUNDLE),
+            )
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            logger.warning(
+                'BFAR source page is unavailable; trying WordPress archive discovery: %s',
+                exc,
+            )
             candidates = _archive_candidates(source_url)
+        else:
+            try:
+                latest_page_candidate = _find_latest(response.text, source_url)
+            except ValueError:
+                latest_page_candidate = None
+
+            latest_pdf_url = (
+                latest_page_candidate['source_url']
+                if latest_page_candidate else ''
+            )
+            if (
+                latest_page_candidate
+                and latest_pdf_url.lower().split('?', 1)[0].endswith('.pdf')
+            ):
+                candidates = [{
+                    **latest_page_candidate,
+                    'pdf_url': latest_pdf_url,
+                    'metadata_date': latest_page_candidate.get('date'),
+                }]
+                logger.info('Using direct latest BFAR homepage PDF: %s', latest_pdf_url)
+            else:
+                candidates = _archive_candidates(source_url)
         if not candidates:
             raise ValueError('No Shellfish Bulletin PDF was found in the BFAR archive.')
 

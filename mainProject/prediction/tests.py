@@ -6,6 +6,7 @@ from unittest.mock import Mock, patch
 
 import numpy as np
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.db import connection
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
@@ -300,6 +301,50 @@ class ShellfishAdvisoryTests(TestCase):
         archive_candidates.assert_not_called()
         upsert_mock.assert_called_once()
 
+    @patch('prediction.services.bfar.firebase_bulletins.upsert')
+    @patch('prediction.services.bfar.fetch_pdf')
+    @patch('prediction.services.bfar._archive_candidates')
+    @patch('prediction.services.bfar.requests.get', side_effect=Timeout)
+    def test_sync_uses_wordpress_archive_when_bfar_homepage_times_out(
+        self, request_get, archive_candidates, fetch_pdf_mock, _upsert_mock,
+    ):
+        archive_candidates.return_value = [{
+            'title': 'Shellfish Bulletin No. 25 Series of 2026',
+            'source_url': 'https://www.bfar.da.gov.ph/bulletin.html',
+            'pdf_url': 'https://www.bfar.da.gov.ph/files/SB-25.pdf',
+            'pdf_filename': 'SB-25.pdf',
+            'pdf_content_type': 'application/pdf',
+            'pdf_size': 128,
+            'pdf_sha256': 'def456',
+            'metadata_bulletin_number': 'SB 25',
+            'metadata_date': date(2026, 10, 16),
+        }]
+        fetch_pdf_mock.return_value = (
+            type('Response', (), {
+                'headers': {'Content-Type': 'application/pdf'},
+                'content': b'%PDF-1.4 cached',
+            })(),
+            {
+                'status': 'See bulletin',
+                'affected_areas': [],
+                'important_information': 'Consult the official bulletin.',
+                'bulletin_number': 'SB 25',
+                'date': date(2026, 10, 16),
+                'pdf_text_extracted': False,
+            },
+        )
+
+        from prediction.services.bfar import sync_latest_advisory
+        result = sync_latest_advisory(force=True)
+
+        self.assertTrue(result['changed'])
+        self.assertEqual(
+            ShellfishAdvisory.objects.get().bulletin_number,
+            'SB 25',
+        )
+        archive_candidates.assert_called_once()
+        request_get.assert_called_once()
+
     @patch('prediction.views.schedule_sync', return_value={
         'attempted': False,
         'changed': False,
@@ -420,6 +465,45 @@ class ShellfishAdvisoryTests(TestCase):
         self.assertTrue(payload['advisory']['stale'])
         self.assertIn('may be outdated', payload['advisory']['warning'])
 
+    def test_seeded_bfar_history_includes_latest_bulletin_and_cached_pdf(self):
+        from django.apps import apps
+
+        migration = importlib.import_module(
+            'prediction.migrations.0007_seed_bulletin_history'
+        )
+        migration.seed_bulletin_history(apps, connection.schema_editor())
+
+        latest = ShellfishAdvisory.objects.get(
+            bulletin_number='SB 25',
+            bulletin_year=2026,
+        )
+        self.assertEqual(latest.advisory_date, date(2026, 10, 16))
+        self.assertEqual(latest.title, 'Shellfish Bulletin No. 25 Series of 2026')
+        self.assertIn('Tantanang Bay', latest.affected_areas)
+        self.assertIn('do not eat', latest.important_information.lower())
+        self.assertTrue(bytes(latest.pdf_content).startswith(b'%PDF'))
+        self.assertEqual(
+            ShellfishAdvisory.objects.filter(bulletin_year=2026).count(),
+            22,
+        )
+
+        history_response = self.client.get(
+            reverse('shellfish_advisory_history'),
+            {'year': 2026, 'page_size': 50},
+        )
+        self.assertEqual(history_response.status_code, 200)
+        history = history_response.json()
+        self.assertEqual(history['pagination']['total'], 22)
+        self.assertEqual(history['bulletins'][0]['bulletin_number'], 'SB 25')
+        self.assertIn(
+            'SB 22',
+            {bulletin['bulletin_number'] for bulletin in history['bulletins']},
+        )
+
+        pdf_response = self.client.get(reverse('shellfish_advisory_pdf'))
+        self.assertEqual(pdf_response.status_code, 200)
+        self.assertTrue(pdf_response.content.startswith(b'%PDF'))
+
     def test_stale_sync_requests_are_throttled(self):
         from prediction import scheduler as advisory_scheduler
 
@@ -473,8 +557,11 @@ class ShellfishAdvisoryTests(TestCase):
 
 
 class SeededAdvisoryMigrationTests(TestCase):
-    def test_empty_database_has_verified_cached_bulletin_for_initial_display(self):
-        advisory = ShellfishAdvisory.objects.get(bulletin_number='SB 22')
+    def test_seeded_history_includes_verified_cached_bulletin(self):
+        advisory = ShellfishAdvisory.objects.get(
+            bulletin_number='SB 22',
+            bulletin_year=2026,
+        )
 
         self.assertEqual(advisory.advisory_date, date(2026, 9, 16))
         self.assertIn('Dumanquillas Bay', advisory.affected_areas)
@@ -492,5 +579,7 @@ class SeededAdvisoryMigrationTests(TestCase):
             'https://sistem1-production.up.railway.app',
             response['Content-Security-Policy'],
         )
-        self.assertEqual(len(response.content), 814626)
+        advisory = ShellfishAdvisory.objects.first()
+        self.assertEqual(advisory.bulletin_number, 'SB 25')
+        self.assertEqual(response.content, bytes(advisory.pdf_content))
         self.assertTrue(response.content.startswith(b'%PDF'))
