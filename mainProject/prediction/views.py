@@ -124,6 +124,15 @@ def shellfish_advisory_pdf(request):
             {'error': 'No cached advisory PDF is available.'},
             status=404
         )
+
+    filename = advisory.pdf_filename or 'bfar-shellfish-advisory.pdf'
+    if advisory.pdf_content:
+        proxy_response = HttpResponse(
+            bytes(advisory.pdf_content),
+            content_type='application/pdf',
+        )
+        proxy_response['Content-Disposition'] = f'inline; filename="{filename}"'
+        return proxy_response
     
     try:
         import requests
@@ -144,9 +153,12 @@ def shellfish_advisory_pdf(request):
                 {'error': 'Retrieved content is not a valid PDF.'},
                 status=502
             )
+
+        ShellfishAdvisory.objects.filter(pk=advisory.pk).update(
+            pdf_content=response.content,
+        )
         
         proxy_response = HttpResponse(response.content, content_type='application/pdf')
-        filename = advisory.pdf_filename or 'bfar-shellfish-advisory.pdf'
         proxy_response['Content-Disposition'] = f'inline; filename="{filename}"'
         return proxy_response
         

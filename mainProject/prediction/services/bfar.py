@@ -595,7 +595,7 @@ def sync_latest_advisory(force=False):
         older_year_count = 0
         for candidate in candidates:
             try:
-                _, parsed_data = fetch_pdf(candidate)
+                pdf_response, parsed_data = fetch_pdf(candidate)
                 identity, rejection_reason = _reconcile_candidate(candidate, parsed_data)
                 if rejection_reason:
                     logger.warning(
@@ -632,6 +632,7 @@ def sync_latest_advisory(force=False):
                         'pdf_content_type': candidate['pdf_content_type'],
                         'pdf_size': candidate['pdf_size'],
                         'pdf_sha256': candidate['pdf_sha256'],
+                        'pdf_content': pdf_response.content,
                         'pdf_text_extracted': candidate['pdf_text_extracted'],
                         'verification_method': candidate['verification_method'],
                         'pdf_checked_at': timezone.now(),
@@ -699,4 +700,3 @@ def sync_latest_advisory(force=False):
         }
     finally:
         _BFAR_SYNC_LOCK.release()
-

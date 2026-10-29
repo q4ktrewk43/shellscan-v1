@@ -122,6 +122,29 @@ class ShellfishAdvisoryTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response['Content-Type'], 'application/pdf')
         self.assertEqual(request_get.call_args.kwargs['timeout'], (5, 15))
+        self.assertEqual(
+            ShellfishAdvisory.objects.get().pdf_content,
+            b'%PDF-1.4 test',
+        )
+
+    @patch('requests.get')
+    def test_pdf_endpoint_serves_cached_pdf_without_contacting_bfar(self, request_get):
+        ShellfishAdvisory.objects.create(
+            bulletin_number='Bulletin 1',
+            bulletin_year=2024,
+            title='Shellfish Advisory',
+            source_url='https://www.bfar.da.gov.ph/',
+            pdf_url='https://www.bfar.da.gov.ph/advisory.pdf',
+            pdf_filename='advisory.pdf',
+            pdf_content=b'%PDF-1.4 cached',
+        )
+
+        response = self.client.get(reverse('shellfish_advisory_pdf'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, b'%PDF-1.4 cached')
+        self.assertEqual(response['Content-Disposition'], 'inline; filename="advisory.pdf"')
+        request_get.assert_not_called()
 
     @patch('requests.get', side_effect=Timeout('connect timed out'))
     def test_pdf_endpoint_returns_gateway_error_on_upstream_timeout(self, _request_get):
@@ -173,7 +196,10 @@ class ShellfishAdvisoryTests(TestCase):
             'important_information': 'Keep cautious.',
         }]
         fetch_pdf_mock.return_value = (
-            type('Response', (), {'headers': {'Content-Type': 'application/pdf'}})(),
+            type('Response', (), {
+                'headers': {'Content-Type': 'application/pdf'},
+                'content': b'%PDF-1.4 cached',
+            })(),
             {
                 'status': 'OPEN',
                 'affected_areas': ['Area A'],
@@ -231,7 +257,10 @@ class ShellfishAdvisoryTests(TestCase):
                 'pdf_sha256': 'def456',
             })
             return (
-                type('Response', (), {'headers': {'Content-Type': 'application/pdf'}})(),
+                type('Response', (), {
+                    'headers': {'Content-Type': 'application/pdf'},
+                    'content': b'%PDF-1.4 cached',
+                })(),
                 {
                     'status': 'OPEN',
                     'affected_areas': ['Area B'],

@@ -15,6 +15,7 @@ class ShellfishAdvisory(models.Model):
 	pdf_content_type = models.CharField(max_length=120, blank=True)
 	pdf_size = models.PositiveBigIntegerField(null=True, blank=True)
 	pdf_sha256 = models.CharField(max_length=64, blank=True)
+	pdf_content = models.BinaryField(null=True, editable=False)
 	pdf_text_extracted = models.BooleanField(default=False)
 	verification_method = models.CharField(max_length=40, blank=True)
 	first_seen_at = models.DateTimeField(auto_now_add=True)
