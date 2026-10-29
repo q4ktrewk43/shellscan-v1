@@ -160,6 +160,8 @@ class ShellfishAdvisoryTests(TestCase):
         self.assertEqual(response.content, b'%PDF-1.4 cached')
         self.assertEqual(response['Content-Disposition'], 'inline; filename="advisory.pdf"')
         self.assertEqual(response['Cache-Control'], 'private, max-age=300')
+        self.assertNotIn('X-Frame-Options', response)
+        self.assertIn('frame-ancestors', response['Content-Security-Policy'])
         request_get.assert_not_called()
 
     @patch('requests.get')
@@ -477,3 +479,18 @@ class SeededAdvisoryMigrationTests(TestCase):
         self.assertEqual(advisory.advisory_date, date(2026, 9, 16))
         self.assertIn('Dumanquillas Bay', advisory.affected_areas)
         self.assertEqual(advisory.verification_method, 'cached_snapshot')
+        self.assertEqual(len(advisory.pdf_content), 814626)
+        self.assertTrue(bytes(advisory.pdf_content).startswith(b'%PDF'))
+
+    def test_seeded_pdf_endpoint_serves_inline_same_origin_copy(self):
+        response = self.client.get(reverse('shellfish_advisory_pdf'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'application/pdf')
+        self.assertNotIn('X-Frame-Options', response)
+        self.assertIn(
+            'https://sistem1-production.up.railway.app',
+            response['Content-Security-Policy'],
+        )
+        self.assertEqual(len(response.content), 814626)
+        self.assertTrue(response.content.startswith(b'%PDF'))

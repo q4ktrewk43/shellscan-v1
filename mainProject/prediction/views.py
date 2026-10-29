@@ -12,6 +12,7 @@ from PIL import Image
 from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
+from django.views.decorators.clickjacking import xframe_options_exempt
 
 from .models import ShellfishAdvisory
 from .scheduler import schedule_sync
@@ -117,6 +118,7 @@ def shellfish_advisory(request):
 
 
 @require_http_methods(["GET"])
+@xframe_options_exempt
 def shellfish_advisory_pdf(request):
     """
     Serve a locally cached advisory PDF, or redirect directly to BFAR.
@@ -127,9 +129,9 @@ def shellfish_advisory_pdf(request):
         filters = {'bulletin_number': bulletin_number}
         if bulletin_year:
             filters['bulletin_year'] = bulletin_year
-        advisory = ShellfishAdvisory.objects.defer('pdf_content').filter(**filters).first()
+        advisory = ShellfishAdvisory.objects.filter(**filters).first()
     else:
-        advisory = ShellfishAdvisory.objects.defer('pdf_content').first()
+        advisory = ShellfishAdvisory.objects.first()
     if advisory is None or not advisory.pdf_url:
         return JsonResponse(
             {'error': 'No cached advisory PDF is available.'},
@@ -138,12 +140,22 @@ def shellfish_advisory_pdf(request):
 
     filename = advisory.pdf_filename or 'bfar-shellfish-advisory.pdf'
     if advisory.pdf_content:
+        from django.conf import settings
+
         proxy_response = HttpResponse(
             bytes(advisory.pdf_content),
             content_type='application/pdf',
         )
         proxy_response['Content-Disposition'] = f'inline; filename="{filename}"'
         proxy_response['Cache-Control'] = 'private, max-age=300'
+        frame_origins = [
+            origin for origin in settings.CORS_ALLOWED_ORIGINS
+            if '*' not in origin
+        ]
+        frame_ancestors = ' '.join(["'self'", *frame_origins])
+        proxy_response['Content-Security-Policy'] = (
+            f'frame-ancestors {frame_ancestors}'
+        )
         return proxy_response
 
     pdf_url = urlsplit(advisory.pdf_url)
