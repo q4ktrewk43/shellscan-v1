@@ -252,7 +252,17 @@ class ShellfishAdvisoryTests(TestCase):
         archive_candidates.assert_not_called()
         upsert_mock.assert_called_once()
 
-    def test_advisory_endpoint_returns_cached_record_when_bfar_fails(self):
+    @patch('prediction.views.schedule_sync', return_value={
+        'attempted': False,
+        'changed': False,
+        'cached': True,
+        'queued': True,
+        'running': True,
+    })
+    @patch('prediction.services.bfar.requests.get')
+    def test_advisory_endpoint_returns_cached_record_without_waiting_for_bfar(
+        self, request_get, schedule_sync_mock,
+    ):
         advisory = ShellfishAdvisory.objects.create(
             bulletin_number='Bulletin 1',
             bulletin_year=2024,
@@ -260,16 +270,71 @@ class ShellfishAdvisoryTests(TestCase):
             source_url='https://www.bfar.da.gov.ph/',
             pdf_url='https://www.bfar.da.gov.ph/advisory.pdf',
         )
-        with patch('prediction.services.bfar.requests.get', side_effect=OSError('offline')):
-            response = self.client.get(reverse('shellfish_advisory'))
+        response = self.client.get(reverse('shellfish_advisory'))
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()['advisory']['bulletin_number'], advisory.bulletin_number)
-        self.assertTrue(response.json()['sync']['cached'])
+        self.assertTrue(response.json()['sync']['queued'])
+        schedule_sync_mock.assert_called_once_with(force=False)
+        request_get.assert_not_called()
 
-    @patch('prediction.services.bfar.requests.get', side_effect=OSError('offline'))
-    def test_advisory_endpoint_reports_unavailable_without_cache(self, _request):
+    @patch('prediction.views.schedule_sync', return_value={
+        'attempted': False,
+        'changed': False,
+        'cached': True,
+        'queued': True,
+        'running': True,
+    })
+    @patch('prediction.services.bfar.requests.get')
+    def test_advisory_post_queues_forced_refresh_without_waiting_for_bfar(
+        self, request_get, schedule_sync_mock,
+    ):
+        advisory = ShellfishAdvisory.objects.create(
+            bulletin_number='Bulletin 1',
+            bulletin_year=2024,
+            title='Shellfish Advisory',
+            source_url='https://www.bfar.da.gov.ph/',
+            pdf_url='https://www.bfar.da.gov.ph/advisory.pdf',
+        )
+
+        response = self.client.post(reverse('shellfish_advisory'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['advisory']['bulletin_number'], advisory.bulletin_number)
+        self.assertTrue(response.json()['sync']['queued'])
+        schedule_sync_mock.assert_called_once_with(force=True)
+        request_get.assert_not_called()
+
+    @patch('prediction.views.schedule_sync', return_value={
+        'attempted': False,
+        'changed': False,
+        'cached': False,
+        'queued': True,
+        'running': True,
+    })
+    def test_advisory_endpoint_reports_unavailable_while_initial_sync_is_queued(
+        self, _schedule_sync,
+    ):
         response = self.client.get(reverse('shellfish_advisory'))
 
-        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.status_code, 202)
         self.assertIsNone(response.json()['advisory'])
+        self.assertTrue(response.json()['sync']['queued'])
+
+    @patch('prediction.views.schedule_sync', side_effect=RuntimeError('scheduler unavailable'))
+    def test_advisory_endpoint_serves_cache_if_background_scheduler_is_unavailable(
+        self, _schedule_sync,
+    ):
+        advisory = ShellfishAdvisory.objects.create(
+            bulletin_number='Bulletin 1',
+            bulletin_year=2024,
+            title='Shellfish Advisory',
+            source_url='https://www.bfar.da.gov.ph/',
+            pdf_url='https://www.bfar.da.gov.ph/advisory.pdf',
+        )
+
+        response = self.client.get(reverse('shellfish_advisory'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['advisory']['bulletin_number'], advisory.bulletin_number)
+        self.assertIn('scheduler unavailable', response.json()['sync']['error'])

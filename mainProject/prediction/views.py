@@ -12,7 +12,7 @@ from django.http import HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from .models import ShellfishAdvisory
-from .services.bfar import sync_latest_advisory
+from .scheduler import schedule_sync
 
 logger = logging.getLogger(__name__)
 
@@ -29,17 +29,29 @@ IMAGES_DIR.mkdir(exist_ok=True)
 @require_http_methods(["GET", "POST"])
 def shellfish_advisory(request):
     """
-    Get or sync the latest BFAR shellfish advisory.
+    Return the cached BFAR advisory and queue a background refresh if needed.
     
-    GET: Returns the cached advisory if available
-    POST: Forces synchronization with BFAR (requires force=True)
+    GET: Returns cached data immediately and refreshes stale data in the background
+    POST: Queues a forced background refresh
     
     Response:
-    - 200: Advisory data is available (fresh or cached)
-    - 503: No advisory available and sync failed
+    - 200: Cached advisory data is available
+    - 202: No cached advisory is available; initial sync is queued
+    - 503: No cached advisory is available and sync could not be queued
     """
-    sync_result = sync_latest_advisory(force=request.method == 'POST')
+    try:
+        sync_result = schedule_sync(force=request.method == 'POST')
+    except Exception as exc:
+        logger.exception('Unable to queue BFAR advisory sync')
+        sync_result = {
+            'attempted': False,
+            'changed': False,
+            'cached': False,
+            'queued': False,
+            'error': str(exc),
+        }
     advisory = ShellfishAdvisory.objects.first()
+    sync_result['cached'] = bool(advisory)
 
     # Parse affected_areas from newline-separated string to list
     affected_areas = []
@@ -48,11 +60,16 @@ def shellfish_advisory(request):
 
     if advisory is None:
         logger.warning(f"No advisory available. Sync result: {sync_result}")
+        status = (
+            503 if sync_result.get('error')
+            else 202 if sync_result.get('queued')
+            else 200
+        )
         return JsonResponse({
             'advisory': None,
             'last_updated': None,
             'sync': sync_result,
-        }, status=503 if sync_result.get('error') else 200)
+        }, status=status)
 
     logger.info(
         "Returning latest advisory: bulletin=%s date=%s source=%s method=%s",
