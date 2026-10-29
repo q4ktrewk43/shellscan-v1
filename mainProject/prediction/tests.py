@@ -9,6 +9,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
 from PIL import Image
+from requests.exceptions import Timeout
 
 from prediction.views import _ensure_probabilities
 from prediction.models import ShellfishAdvisory
@@ -101,6 +102,42 @@ class RootRouteTests(TestCase):
 
 
 class ShellfishAdvisoryTests(TestCase):
+    @patch('requests.get')
+    def test_pdf_endpoint_returns_pdf_with_bounded_upstream_timeout(self, request_get):
+        ShellfishAdvisory.objects.create(
+            bulletin_number='Bulletin 1',
+            bulletin_year=2024,
+            title='Shellfish Advisory',
+            source_url='https://www.bfar.da.gov.ph/',
+            pdf_url='https://www.bfar.da.gov.ph/advisory.pdf',
+            pdf_filename='advisory.pdf',
+        )
+        request_get.return_value = type('Response', (), {
+            'content': b'%PDF-1.4 test',
+            'raise_for_status': lambda self: None,
+        })()
+
+        response = self.client.get(reverse('shellfish_advisory_pdf'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'application/pdf')
+        self.assertEqual(request_get.call_args.kwargs['timeout'], (5, 15))
+
+    @patch('requests.get', side_effect=Timeout('connect timed out'))
+    def test_pdf_endpoint_returns_gateway_error_on_upstream_timeout(self, _request_get):
+        ShellfishAdvisory.objects.create(
+            bulletin_number='Bulletin 1',
+            bulletin_year=2024,
+            title='Shellfish Advisory',
+            source_url='https://www.bfar.da.gov.ph/',
+            pdf_url='https://www.bfar.da.gov.ph/advisory.pdf',
+        )
+
+        response = self.client.get(reverse('shellfish_advisory_pdf'))
+
+        self.assertEqual(response.status_code, 502)
+        self.assertIn('Unable to retrieve the advisory PDF', response.json()['error'])
+
     def test_parse_date_handles_abbreviated_month_names(self):
         from prediction.services.bfar import _parse_date
 

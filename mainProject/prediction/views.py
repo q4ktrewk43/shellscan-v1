@@ -116,7 +116,7 @@ def shellfish_advisory_pdf(request):
         
         response = requests.get(
             advisory.pdf_url,
-            timeout=60,
+            timeout=(5, 15),
             headers={'User-Agent': 'SEASTEAM advisory sync/1.0'},
             verify=str(settings.BFAR_CA_BUNDLE),
         )
@@ -280,6 +280,7 @@ def predict_shell(request):
             'content_type': uploaded_file.content_type,
             'saved_image': saved_filename,
         }, status=200)
+
     except Exception as exc:
         return JsonResponse({
             'error': f'Prediction failed: {exc}',
@@ -383,4 +384,3 @@ def shellfish_advisory_history(request):
             'has_next': page < total_pages,
         }
     }, status=200)
-
