@@ -9,7 +9,6 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
 from PIL import Image
-from requests.exceptions import Timeout
 
 from prediction.views import _ensure_probabilities
 from prediction.models import ShellfishAdvisory
@@ -103,7 +102,7 @@ class RootRouteTests(TestCase):
 
 class ShellfishAdvisoryTests(TestCase):
     @patch('requests.get')
-    def test_pdf_endpoint_returns_pdf_with_bounded_upstream_timeout(self, request_get):
+    def test_pdf_endpoint_redirects_directly_to_official_pdf(self, request_get):
         ShellfishAdvisory.objects.create(
             bulletin_number='Bulletin 1',
             bulletin_year=2024,
@@ -119,13 +118,13 @@ class ShellfishAdvisoryTests(TestCase):
 
         response = self.client.get(reverse('shellfish_advisory_pdf'))
 
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response['Content-Type'], 'application/pdf')
-        self.assertEqual(request_get.call_args.kwargs['timeout'], (5, 15))
+        self.assertEqual(response.status_code, 302)
         self.assertEqual(
-            ShellfishAdvisory.objects.get().pdf_content,
-            b'%PDF-1.4 test',
+            response['Location'],
+            'https://www.bfar.da.gov.ph/advisory.pdf',
         )
+        self.assertEqual(response['Cache-Control'], 'no-store')
+        request_get.assert_not_called()
 
     @patch('requests.get')
     def test_pdf_endpoint_serves_cached_pdf_without_contacting_bfar(self, request_get):
@@ -144,22 +143,24 @@ class ShellfishAdvisoryTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.content, b'%PDF-1.4 cached')
         self.assertEqual(response['Content-Disposition'], 'inline; filename="advisory.pdf"')
+        self.assertEqual(response['Cache-Control'], 'private, max-age=300')
         request_get.assert_not_called()
 
-    @patch('requests.get', side_effect=Timeout('connect timed out'))
-    def test_pdf_endpoint_returns_gateway_error_on_upstream_timeout(self, _request_get):
+    @patch('requests.get')
+    def test_pdf_endpoint_rejects_non_official_pdf_url(self, request_get):
         ShellfishAdvisory.objects.create(
             bulletin_number='Bulletin 1',
             bulletin_year=2024,
             title='Shellfish Advisory',
             source_url='https://www.bfar.da.gov.ph/',
-            pdf_url='https://www.bfar.da.gov.ph/advisory.pdf',
+            pdf_url='https://example.com/advisory.pdf',
         )
 
         response = self.client.get(reverse('shellfish_advisory_pdf'))
 
         self.assertEqual(response.status_code, 502)
-        self.assertIn('Unable to retrieve the advisory PDF', response.json()['error'])
+        self.assertIn('not an official BFAR URL', response.json()['error'])
+        request_get.assert_not_called()
 
     def test_parse_date_handles_abbreviated_month_names(self):
         from prediction.services.bfar import _parse_date

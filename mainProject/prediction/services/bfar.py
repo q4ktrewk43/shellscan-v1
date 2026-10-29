@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 _BFAR_SYNC_LOCK = threading.Lock()
 
 DEFAULT_BFAR_URL = 'https://www.bfar.da.gov.ph/'
-REQUEST_TIMEOUT = 30
+REQUEST_TIMEOUT = (5, 15)
 SYNC_INTERVAL = timedelta(hours=6)
 WP_SEARCH_URL = 'https://www.bfar.da.gov.ph/wp-json/wp/v2/search'
 WP_MEDIA_URL = 'https://www.bfar.da.gov.ph/wp-json/wp/v2/media'
@@ -473,7 +473,7 @@ def fetch_pdf(advisory_dict):
     
     response = requests.get(
         advisory_dict['pdf_url'],
-        timeout=60,
+        timeout=(5, 15),
         headers={
             'User-Agent': 'SEASTEAM advisory sync/1.0'
         },
@@ -536,7 +536,7 @@ def sync_latest_advisory(force=False):
     - cached: bool - whether cached data is available
     - error: str (optional) - error message if sync failed
     """
-    latest = ShellfishAdvisory.objects.first()
+    latest = ShellfishAdvisory.objects.defer('pdf_content').first()
 
     # Prevent overlapping syncs on SQLite, which otherwise raises database locked.
     if not _BFAR_SYNC_LOCK.acquire(blocking=False):
@@ -659,7 +659,7 @@ def sync_latest_advisory(force=False):
         if created_count == 0 and updated_count == 0:
             raise ValueError('No valid Shellfish Bulletins could be parsed from the BFAR archive.')
 
-        latest = ShellfishAdvisory.objects.first()
+        latest = ShellfishAdvisory.objects.defer('pdf_content').first()
         current_year_numbers = set(
             ShellfishAdvisory.objects.filter(
                 bulletin_year=timezone.localdate().year,

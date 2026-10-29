@@ -4,13 +4,15 @@ import os
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import numpy as np
 from django.utils import timezone
 from PIL import Image
-from django.http import HttpResponse, JsonResponse
+from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
+
 from .models import ShellfishAdvisory
 from .scheduler import schedule_sync
 
@@ -50,7 +52,7 @@ def shellfish_advisory(request):
             'queued': False,
             'error': str(exc),
         }
-    advisory = ShellfishAdvisory.objects.first()
+    advisory = ShellfishAdvisory.objects.defer('pdf_content').first()
     sync_result['cached'] = bool(advisory)
 
     # Parse affected_areas from newline-separated string to list
@@ -107,8 +109,7 @@ def shellfish_advisory(request):
 @require_http_methods(["GET"])
 def shellfish_advisory_pdf(request):
     """
-    Proxy endpoint to retrieve the cached advisory PDF.
-    Downloads the PDF from the cached URL and returns it.
+    Serve a locally cached advisory PDF, or redirect directly to BFAR.
     """
     bulletin_number = request.GET.get('bulletin_number')
     bulletin_year = request.GET.get('year')
@@ -116,9 +117,9 @@ def shellfish_advisory_pdf(request):
         filters = {'bulletin_number': bulletin_number}
         if bulletin_year:
             filters['bulletin_year'] = bulletin_year
-        advisory = ShellfishAdvisory.objects.filter(**filters).first()
+        advisory = ShellfishAdvisory.objects.defer('pdf_content').filter(**filters).first()
     else:
-        advisory = ShellfishAdvisory.objects.first()
+        advisory = ShellfishAdvisory.objects.defer('pdf_content').first()
     if advisory is None or not advisory.pdf_url:
         return JsonResponse(
             {'error': 'No cached advisory PDF is available.'},
@@ -132,42 +133,23 @@ def shellfish_advisory_pdf(request):
             content_type='application/pdf',
         )
         proxy_response['Content-Disposition'] = f'inline; filename="{filename}"'
+        proxy_response['Cache-Control'] = 'private, max-age=300'
         return proxy_response
-    
-    try:
-        import requests
-        from django.conf import settings
-        
-        logger.info(f"Proxying PDF: {advisory.pdf_url}")
-        
-        response = requests.get(
-            advisory.pdf_url,
-            timeout=(5, 15),
-            headers={'User-Agent': 'SEASTEAM advisory sync/1.0'},
-            verify=str(settings.BFAR_CA_BUNDLE),
-        )
-        response.raise_for_status()
-        
-        if not response.content.startswith(b'%PDF'):
-            return JsonResponse(
-                {'error': 'Retrieved content is not a valid PDF.'},
-                status=502
-            )
 
-        ShellfishAdvisory.objects.filter(pk=advisory.pk).update(
-            pdf_content=response.content,
-        )
-        
-        proxy_response = HttpResponse(response.content, content_type='application/pdf')
-        proxy_response['Content-Disposition'] = f'inline; filename="{filename}"'
-        return proxy_response
-        
-    except Exception as exc:
-        logger.error(f"Failed to retrieve advisory PDF: {exc}")
+    pdf_url = urlsplit(advisory.pdf_url)
+    if (
+        pdf_url.scheme != 'https'
+        or pdf_url.hostname not in {'bfar.da.gov.ph', 'www.bfar.da.gov.ph'}
+    ):
+        logger.error('Refusing to redirect to non-BFAR PDF URL: %s', advisory.pdf_url)
         return JsonResponse(
-            {'error': f'Unable to retrieve the advisory PDF: {exc}'},
+            {'error': 'The cached advisory PDF URL is not an official BFAR URL.'},
             status=502
         )
+
+    redirect_response = HttpResponseRedirect(advisory.pdf_url)
+    redirect_response['Cache-Control'] = 'no-store'
+    return redirect_response
 
 
 def _ensure_probabilities(output):
@@ -364,7 +346,7 @@ def shellfish_advisory_history(request):
             return JsonResponse({'error': 'year must be between 2000 and 2100'}, status=400)
 
     # Filter by year, then sort by the authoritative advisory date.
-    all_bulletins = ShellfishAdvisory.objects.filter(
+    all_bulletins = ShellfishAdvisory.objects.defer('pdf_content').filter(
         bulletin_year=selected_year,
     ).order_by('-advisory_date', '-first_seen_at')
     total_count = all_bulletins.count()

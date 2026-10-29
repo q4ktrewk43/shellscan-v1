@@ -19,7 +19,7 @@ def _run_sync(force=False):
 
 
 def schedule_sync(force=False):
-    latest = ShellfishAdvisory.objects.first()
+    latest = ShellfishAdvisory.objects.defer('pdf_content').first()
     if (
         latest
         and not force
