@@ -1,14 +1,16 @@
 import importlib
 import io
 import os
-from datetime import date
-from unittest.mock import patch
+from datetime import date, timedelta
+from unittest.mock import Mock, patch
 
 import numpy as np
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
+from django.utils import timezone
 from PIL import Image
+from requests.exceptions import Timeout
 
 from prediction.views import _ensure_probabilities, _preprocess_image
 from prediction.models import ShellfishAdvisory
@@ -112,6 +114,9 @@ class RootRouteTests(TestCase):
 
 
 class ShellfishAdvisoryTests(TestCase):
+    def setUp(self):
+        ShellfishAdvisory.objects.all().delete()
+
     @patch('requests.get')
     def test_pdf_endpoint_redirects_directly_to_official_pdf(self, request_get):
         ShellfishAdvisory.objects.create(
@@ -379,3 +384,96 @@ class ShellfishAdvisoryTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()['advisory']['bulletin_number'], advisory.bulletin_number)
         self.assertIn('scheduler unavailable', response.json()['sync']['error'])
+
+    def test_stale_advisory_response_includes_warning(self):
+        ShellfishAdvisory.objects.create(
+            bulletin_number='SB 22',
+            bulletin_year=2026,
+            title='Shellfish Bulletin No. 22',
+            advisory_date=date(2026, 9, 16),
+            status='PSP positive above the regulatory limit',
+            affected_areas='Dumanquillas Bay',
+            important_information='Verify current conditions with BFAR.',
+            source_url='https://www.bfar.da.gov.ph/',
+            pdf_url='https://www.bfar.da.gov.ph/advisory.pdf',
+        )
+        ShellfishAdvisory.objects.update(
+            last_checked_at=timezone.now() - timedelta(days=1),
+        )
+
+        with patch('prediction.views.schedule_sync', return_value={
+            'attempted': False,
+            'changed': False,
+            'cached': True,
+            'queued': False,
+            'stale': True,
+        }):
+            response = self.client.get(reverse('shellfish_advisory'))
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload['advisory']['bulletin_number'], 'SB 22')
+        self.assertTrue(payload['sync']['stale'])
+        self.assertIn('may be outdated', payload['sync']['warning'])
+        self.assertTrue(payload['advisory']['stale'])
+        self.assertIn('may be outdated', payload['advisory']['warning'])
+
+    def test_stale_sync_requests_are_throttled(self):
+        from prediction import scheduler as advisory_scheduler
+
+        advisory = ShellfishAdvisory.objects.create(
+            bulletin_number='SB 22',
+            bulletin_year=2026,
+            title='Shellfish Bulletin No. 22',
+            source_url='https://www.bfar.da.gov.ph/',
+            pdf_url='https://www.bfar.da.gov.ph/advisory.pdf',
+        )
+        ShellfishAdvisory.objects.filter(pk=advisory.pk).update(
+            last_checked_at=timezone.now() - timedelta(days=1),
+        )
+        fake_scheduler = type('Scheduler', (), {
+            'running': True,
+            'add_job': Mock(),
+        })()
+
+        with (
+            patch.object(advisory_scheduler, 'scheduler', fake_scheduler),
+            patch.object(advisory_scheduler, '_last_on_demand_sync_at', None),
+        ):
+            first = advisory_scheduler.schedule_sync()
+            second = advisory_scheduler.schedule_sync()
+
+        self.assertTrue(first['queued'])
+        self.assertFalse(second['queued'])
+        self.assertGreater(second['retry_after_seconds'], 0)
+        fake_scheduler.add_job.assert_called_once()
+
+    @patch('prediction.services.bfar.requests.get', side_effect=Timeout('offline'))
+    def test_failed_sync_does_not_mark_stale_advisory_as_fresh(self, _request_get):
+        advisory = ShellfishAdvisory.objects.create(
+            bulletin_number='SB 22',
+            bulletin_year=2026,
+            title='Shellfish Bulletin No. 22',
+            source_url='https://www.bfar.da.gov.ph/',
+            pdf_url='https://www.bfar.da.gov.ph/advisory.pdf',
+        )
+        stale_checked_at = timezone.now() - timedelta(days=1)
+        ShellfishAdvisory.objects.filter(pk=advisory.pk).update(
+            last_checked_at=stale_checked_at,
+        )
+
+        from prediction.services.bfar import sync_latest_advisory
+        result = sync_latest_advisory(force=True)
+
+        self.assertIn('offline', result['error'])
+        advisory.refresh_from_db()
+        self.assertEqual(advisory.last_checked_at, stale_checked_at)
+
+
+class SeededAdvisoryMigrationTests(TestCase):
+    def test_empty_database_has_verified_cached_bulletin_for_initial_display(self):
+        advisory = ShellfishAdvisory.objects.get(bulletin_number='SB 22')
+
+        self.assertEqual(advisory.advisory_date, date(2026, 9, 16))
+        self.assertIn('Dumanquillas Bay', advisory.affected_areas)
+        self.assertEqual(advisory.verification_method, 'cached_snapshot')

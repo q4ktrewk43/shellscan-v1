@@ -688,9 +688,6 @@ def sync_latest_advisory(force=False):
     except (requests.RequestException, ValueError, OSError) as exc:
         logger.error(f"Sync failed: {exc}")
 
-        if latest:
-            ShellfishAdvisory.objects.filter(pk=latest.pk).update(last_checked_at=timezone.now())
-
         return {
             'attempted': True,
             'changed': False,

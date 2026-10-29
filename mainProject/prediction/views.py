@@ -1,7 +1,7 @@
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -54,6 +54,14 @@ def shellfish_advisory(request):
         }
     advisory = ShellfishAdvisory.objects.defer('pdf_content').first()
     sync_result['cached'] = bool(advisory)
+    sync_result['stale'] = bool(
+        advisory and timezone.now() - advisory.last_checked_at >= timedelta(hours=6)
+    )
+    if sync_result['stale']:
+        sync_result['warning'] = (
+            'Showing a cached advisory that may be outdated. '
+            'Check the official BFAR source for current conditions.'
+        )
 
     # Parse affected_areas from newline-separated string to list
     affected_areas = []
@@ -94,6 +102,8 @@ def shellfish_advisory(request):
             'pdf_filename': advisory.pdf_filename,
             'pdf_content_type': advisory.pdf_content_type,
             'pdf_size': advisory.pdf_size,
+            'stale': sync_result['stale'],
+            'warning': sync_result.get('warning'),
         },
         'last_updated': advisory.last_checked_at.isoformat(),
         'sync': sync_result,
