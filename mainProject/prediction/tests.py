@@ -10,11 +10,22 @@ from django.test import TestCase
 from django.urls import reverse
 from PIL import Image
 
-from prediction.views import _ensure_probabilities
+from prediction.views import _ensure_probabilities, _preprocess_image
 from prediction.models import ShellfishAdvisory
 
 
 class PredictViewTests(TestCase):
+    def test_preprocess_image_preserves_efficientnet_v2_input_values(self):
+        image = Image.new('RGB', (224, 224), color=(0, 128, 255))
+        buffer = io.BytesIO()
+        image.save(buffer, format='PNG')
+        buffer.seek(0)
+
+        processed = _preprocess_image(buffer)
+
+        self.assertEqual(processed.shape, (1, 224, 224, 3))
+        np.testing.assert_array_equal(processed[0, 0, 0], [0.0, 128.0, 255.0])
+
     def test_softmax_normalizes_logits_before_confidence_is_reported(self):
         logits = np.array([3.0, 1.0, -1.0, -2.0], dtype=np.float32)
         probabilities = _ensure_probabilities(logits)

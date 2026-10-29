@@ -1,0 +1,9 @@
+**/.env
+**/credentials/
+**/.venv/
+**/__pycache__/
+**/*.py[cod]
+**/db.sqlite3
+**/staticfiles/
+**/prediction/images/
+mainProject/prediction/model/best_seaweed_model.keras

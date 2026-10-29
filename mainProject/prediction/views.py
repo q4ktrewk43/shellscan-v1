@@ -190,12 +190,8 @@ def _ensure_probabilities(output):
 def get_model_and_labels():
     try:
         from ai_edge_litert.interpreter import Interpreter as LiteRTInterpreter
-    except ImportError:
-        try:
-            import tensorflow as tf
-            LiteRTInterpreter = tf.lite.Interpreter
-        except Exception as exc:  # pragma: no cover - runtime env issue
-            raise RuntimeError(f'TensorFlow/LiteRT runtime is missing or broken: {exc}') from exc
+    except ImportError as exc:  # pragma: no cover - runtime env issue
+        raise RuntimeError(f'LiteRT runtime is missing or broken: {exc}') from exc
 
     if not MODEL_PATH.exists():
         raise FileNotFoundError(f'Model file not found: {MODEL_PATH}')
@@ -216,11 +212,7 @@ def _preprocess_image(uploaded_file):
     image = Image.open(uploaded_file).convert('RGB')
     image = image.resize(IMAGE_SHAPE, Image.Resampling.BILINEAR)
     image_array = np.asarray(image, dtype=np.float32)
-
-    from tensorflow.keras.applications.efficientnet_v2 import preprocess_input
-
-    image_preprocessed = preprocess_input(image_array)
-    return np.expand_dims(image_preprocessed, axis=0)
+    return np.expand_dims(image_array, axis=0)
 
 
 @csrf_exempt

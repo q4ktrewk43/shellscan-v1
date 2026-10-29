@@ -6,8 +6,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 COPY mainProject/requirements.txt /app/mainProject/requirements.txt
-RUN python -m pip install --upgrade pip \
-    && pip install -r /app/mainProject/requirements.txt
+RUN python -m pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r /app/mainProject/requirements.txt
 
 COPY mainProject /app/mainProject
 
